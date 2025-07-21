@@ -7,70 +7,6 @@ import Modal from "react-modal";
 import DefaultPage from "./components/Default";
 Modal.setAppElement("#root");
 
-// MarkdownTableRenderer Component for displaying Gemini's tabular output
-const MarkdownTableRenderer = ({ markdown }) => {
-  const parseMarkdownTable = (markdownString) => {
-    const lines = markdownString.split('\n').map(line => line.trim()).filter(line => line.length > 0);
-    if (lines.length < 2) return null; // Needs at least header and separator
-
-    const headerLine = lines[0];
-    const separatorLine = lines[1];
-
-    // Basic check for markdown table separator (e.g., ---|---)
-    if (!separatorLine.includes('---')) {
-      return null; // Not a valid markdown table
-    }
-
-    // Split headers and trim
-    const headers = headerLine.split('|').map(h => h.trim()).filter(h => h.length > 0);
-    const rows = [];
-
-    // Parse data rows
-    for (let i = 2; i < lines.length; i++) {
-      const rowData = lines[i].split('|').map(cell => cell.trim()).filter(cell => cell.length > 0);
-      if (rowData.length === headers.length) {
-        rows.push(rowData);
-      } else {
-          // If a line doesn't match the column count, it might be the end of the table or a malformed row.
-          break; // Stop parsing this table
-      }
-    }
-    if (headers.length === 0 || rows.length === 0) return null; // Ensure we have headers and at least one row
-    return { headers, rows };
-  };
-
-  const tableData = parseMarkdownTable(markdown);
-
-  if (!tableData) {
-    return (
-      // If it's not a parseable table, render as preformatted text
-      <pre className="markdown-plain-text"><span>{markdown}</span></pre>
-    );
-  }
-
-  return (
-    <table className="markdown-table">
-      <thead>
-        <tr>
-          {tableData.headers.map((header, index) => (
-            <th key={index}>{header}</th>
-          ))}
-        </tr>
-      </thead>
-      <tbody>
-        {tableData.rows.map((row, rowIndex) => (
-          <tr key={rowIndex}>
-            {row.map((cell, cellIndex) => (
-              <td key={cellIndex}>{cell}</td>
-            ))}
-          </tr>
-        ))}
-      </tbody>
-    </table>
-  );
-};
-
-
 function App() {
   const [value, setValue] = useState("");
   const [modalValue, setModalValue] = useState("");
@@ -81,21 +17,13 @@ function App() {
   const [isDeletePromptOpen, setIsDeletePromptOpen] = useState(false);
   const [isAlertOpen, setIsAlertOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
-  const [isSpeaking] = useState(false); // Assuming this is managed elsewhere or not actively used for speaking
+  const [isSpeaking] = useState(false);
   const chatFeedRef = useRef(null);
   const [isDefaultPage, setIsDefaultPage] = useState(true); // Track if the default page should be shown
   const [theme, setTheme] = useState("default");
   const [isThemeMenuOpen, setIsThemeMenuOpen] = useState(false);
   const [isActive, setIsActive] = useState(false);
-  const silenceTimeoutRef = useRef(null); // Keep this for existing silence logic
-
-  // New state for Nutrition Modal
-  const [isNutritionModalOpen, setIsNutritionModalOpen] = useState(false);
-  const [nutritionHeight, setNutritionHeight] = useState('');
-  const [nutritionWeight, setNutritionWeight] = useState('');
-  const [nutritionInstructions, setNutritionInstructions] = useState('');
-
-
+  const silenceTimeoutRef = useRef(null);
   const toggleMenu = () => {
     setIsActive(!isActive);
   };
@@ -104,41 +32,61 @@ function App() {
     setIsThemeMenuOpen(false);
   };
 
-  const createNewChat = () => {
+  const handleThemeMenuToggle = () => {
+    setIsThemeMenuOpen((prevState) => !prevState);
+  };
+
+  const createNewChat = async () => {
+    setIsDefaultPage(false); // Hide the default page
+
+    const chatNumber = previousChats.length;
+    const uniqueTitle = `Chat ${chatNumber}`;
     setMessage(null);
     setValue("");
-    setCurrentTitle("");
-    setIsDefaultPage(true); // Show default page for new chat
-    fetch("http://localhost:8000/newSession", { method: "POST" })
-      .then((res) => res.json())
-      .then((data) => console.log(data.message))
-      .catch((err) => console.error("Error resetting session:", err));
+    setCurrentTitle(uniqueTitle.substring(0, 10));
+    await fetch("http://localhost:8000/newSession", {
+      method: "POST",
+      body: JSON.stringify({
+        message: value,
+      }),
+      headers: {
+        "Content-Type": "application/json",
+      },
+    });
   };
 
   const handleClick = (uniqueTitle) => {
     setCurrentTitle(uniqueTitle);
     setMessage(null);
-    setValue("");
-    setIsDefaultPage(false); // Hide default page when a chat is selected
+    setIsDefaultPage(false);
   };
 
-  const handleKeyPress = (e) => {
-    if (e.key === "Enter") {
-      getMessages();
+  const handleRename = (uniqueTitle) => {
+    setIsPromptOpen(true);
+    setModalValue(uniqueTitle);
+  };
+
+  const handlePromptClose = () => {
+    setIsPromptOpen(false);
+  };
+
+  const handlePromptSubmit = () => {
+    if (modalValue.length > 16) {
+      setIsAlertOpen(true);
+    } else {
+      setPreviousChats((prevChats) =>
+        prevChats.map((chat) =>
+          chat.title === currentTitle ? { ...chat, title: modalValue } : chat
+        )
+      );
+      setIsPromptOpen(false);
+      setCurrentTitle(modalValue);
+      setIsDefaultPage(false);
     }
   };
 
   const getMessages = async () => {
     if (!value) return;
-
-    // Check for nutrition plan intent to open modal instead of sending to backend directly
-    if (value.toLowerCase().includes("nutrition plan") || value.toLowerCase().includes("meal plan") || value.toLowerCase().includes("workout plan")) {
-      setIsNutritionModalOpen(true); // Open the modal
-      setValue(""); // Clear the input field
-      setIsDefaultPage(false); // Move away from default page
-      return; // Stop here, don't send to /completions yet
-    }
-
     setIsLoading(true);
 
     // Clear the silence timeout when sending the message
@@ -158,9 +106,13 @@ function App() {
     };
 
     try {
-      const response = await fetch("http://localhost:8000/completions", options);
+      const response = await fetch(
+        "http://localhost:8000/completions",
+        options
+      );
       const data = await response.json();
 
+      // Update message state so that useEffect handles chat update
       if (data.image) {
         setMessage({
           title: currentTitle,
@@ -176,6 +128,7 @@ function App() {
         });
       }
 
+      // Update message state with user message as well
       setPreviousChats((prevChats) => [
         ...prevChats,
         {
@@ -186,7 +139,7 @@ function App() {
       ]);
 
       setValue("");
-      // if (isSpeaking) stopSpeaking(); // Assuming stopSpeaking function exists elsewhere
+      if (isSpeaking) stopSpeaking();
     } catch (error) {
       console.error(error);
     } finally {
@@ -194,342 +147,355 @@ function App() {
     }
   };
 
-  // Functions for Nutrition Modal
-  const handleOpenNutritionModal = () => {
-    setIsNutritionModalOpen(true);
-    setNutritionHeight('');
-    setNutritionWeight('');
-    setNutritionInstructions('');
-  };
-
-  const handleCloseNutritionModal = () => {
-    setIsNutritionModalOpen(false);
-  };
-
-  const handleSubmitNutrition = async () => {
-    if (!nutritionHeight || !nutritionWeight || !nutritionInstructions) {
-      setIsAlertOpen(true); // Re-use alert for missing info
-      setModalValue("Please fill in all fields (Height, Weight, and Instructions).");
-      return;
-    }
-
-    setIsLoading(true);
-    handleCloseNutritionModal(); // Close modal immediately
-
-    const options = {
-      method: "POST",
-      body: JSON.stringify({
-        height: parseFloat(nutritionHeight),
-        weight: parseFloat(nutritionWeight),
-        instructions: nutritionInstructions,
-      }),
-      headers: {
-        "Content-Type": "application/json",
-      },
+  const speak = (content) => {
+    const speechSynthesis = window.speechSynthesis;
+    const utterance = new SpeechSynthesisUtterance(content);
+    utterance.onend = () => {
+      stopSpeaking();
     };
+    speechSynthesis.speak(utterance);
 
-    try {
-      const response = await fetch("http://localhost:8000/generate-nutrition-plan", options);
-      const data = await response.json();
-
-      if (data.error) {
-        setMessage({
-          title: currentTitle,
-          role: "assistant",
-          content: `Error: ${data.error}`,
-        });
-      } else {
-        setMessage({
-          title: currentTitle,
-          role: "assistant",
-          content: data.completion,
-        });
-      }
-      // Add a user entry to chat history representing the request from the modal
-      setPreviousChats((prevChats) => [
-        ...prevChats,
-        {
-          title: currentTitle,
-          role: "user",
-          content: `Requested nutrition plan (Height: ${nutritionHeight}cm, Weight: ${nutritionWeight}kg, Goals: ${nutritionInstructions}).`,
-        },
-      ]);
-
-    } catch (error) {
-      console.error("Nutrition plan generation error:", error);
-      setMessage({
-        title: currentTitle,
-        role: "assistant",
-        content: "Failed to generate your nutrition plan. Please try again.",
-      });
-    } finally {
-      setIsLoading(false);
-    }
+    // Update the speaking state for the current chat message
+    setPreviousChats((prevChats) =>
+      prevChats.map((chat) =>
+        chat.title === currentTitle ? { ...chat, isSpeaking: true } : chat
+      )
+    );
   };
 
+  const stopSpeaking = () => {
+    const speechSynthesis = window.speechSynthesis;
+    speechSynthesis.cancel();
 
+    // Update the speaking state for the current chat message
+    setPreviousChats((prevChats) =>
+      prevChats.map((chat) =>
+        chat.title === currentTitle ? { ...chat, isSpeaking: false } : chat
+      )
+    );
+  };
   useEffect(() => {
-    if (!currentTitle && message && message.content) {
-      setCurrentTitle(message.content.substring(0, 16));
-    }
     if (message) {
       setPreviousChats((prevChats) => [
         ...prevChats,
         {
           title: currentTitle,
           role: message.role,
-          content: message.content,
+          content: message.content, // This is already the string content
           image: message.image,
         },
       ]);
     }
-  }, [message, currentTitle]);
+  }, [message]);
 
   useEffect(() => {
-    if (chatFeedRef.current) {
-      chatFeedRef.current.scrollTop = chatFeedRef.current.scrollHeight;
-    }
+    chatFeedRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [previousChats]);
 
   const currentChat = previousChats.filter(
-    (chat) => chat.title === currentTitle
+    (previousChat) => previousChat.title === currentTitle
   );
   const uniqueTitles = Array.from(
-    new Set(previousChats.map((chat) => chat.title))
+    new Set(previousChats.map((previousChat) => previousChat.title))
   );
 
-  const handleRenameClick = () => {
-    setModalValue(currentTitle);
-    setIsPromptOpen(true);
-  };
-
-  const handlePromptSubmit = () => {
-    if (modalValue.length > 16) {
-      setIsAlertOpen(true);
-      setModalValue("The chat name is too big. Please try a shorter one. The limit is up to 16 characters.");
-      return;
+  const handleKeyPress = (e) => {
+    if (e.key === "Enter") {
+      if (isPromptOpen) {
+        e.preventDefault(); // Prevent from submission
+        handlePromptSubmit(); // Programmatically click the "Rename" button
+      } else {
+        getMessages();
+        setIsDefaultPage(false);
+      }
     }
-    const updatedChats = previousChats.map((chat) =>
-      chat.title === currentTitle ? { ...chat, title: modalValue } : chat
-    );
-    setPreviousChats(updatedChats);
-    setCurrentTitle(modalValue);
-    setIsPromptOpen(false);
   };
 
-  const handlePromptClose = () => {
-    setIsPromptOpen(false);
+  const [isListening, setIsListening] = useState(false);
+  const recognition = useRef(null);
+
+  useEffect(() => {
+    if ("SpeechRecognition" in window || "webkitSpeechRecognition" in window) {
+      recognition.current = new (window.SpeechRecognition ||
+        window.webkitSpeechRecognition)();
+      recognition.current.continuous = true;
+      recognition.current.interimResults = true;
+
+      recognition.current.onstart = () => {
+        setIsListening(true);
+        // Start silence timer when recognition starts
+        silenceTimeoutRef.current = setTimeout(() => {
+          if (recognition.current && isListening) {
+            console.log("4 seconds of silence detected. Sending message.");
+            stopListening(); // This will trigger getMessages
+          }
+        }, 2000); // 4 seconds
+      };
+
+      recognition.current.onresult = (event) => {
+        const transcript = Array.from(event.results)
+          .map((result) => result[0])
+          .map((result) => result.transcript)
+          .join("");
+
+        setValue(transcript); // Always update the value with the latest transcript
+
+        // Only reset the silence timer if the transcript has actual content
+        // This means the timer will continue if 'onresult' fires with an empty transcript
+        if (transcript.trim().length > 0) { // Check if transcript is not just whitespace
+          if (silenceTimeoutRef.current) {
+            clearTimeout(silenceTimeoutRef.current);
+          }
+          silenceTimeoutRef.current = setTimeout(() => {
+            if (recognition.current && isListening) {
+              console.log("4 seconds of silence detected. Sending message.");
+              stopListening(); // This will trigger getMessages
+            }
+          }, 2000); // 4 seconds
+        }
+      };
+
+      recognition.current.onend = () => {
+        setIsListening(false);
+        // Clear any lingering timeout when recognition truly ends
+        if (silenceTimeoutRef.current) {
+          clearTimeout(silenceTimeoutRef.current);
+          silenceTimeoutRef.current = null;
+        }
+      };
+
+      recognition.current.onerror = (event) => {
+        console.error("Speech recognition error:", event.error);
+        setIsListening(false); // Stop listening on error
+        if (silenceTimeoutRef.current) {
+          clearTimeout(silenceTimeoutRef.current);
+          silenceTimeoutRef.current = null;
+        }
+      };
+    }
+  }, []);
+
+  const startListening = () => {
+    if (recognition.current) {
+      setIsListening(true);
+      recognition.current.start();
+    }
   };
 
-  const handleDeleteClick = () => {
+const stopListening = () => {
+    if (recognition.current && isListening) {
+      recognition.current.stop(); // Stop the speech recognition
+      setIsListening(false);     // Update listening state
+      // Ensure the timeout is cleared when manually stopping or when silence triggers it
+      if (silenceTimeoutRef.current) {
+        clearTimeout(silenceTimeoutRef.current);
+        silenceTimeoutRef.current = null;
+      }
+      // Regardless of how it stopped, if there's a value, send the message
+      if (value) {
+        setIsDefaultPage(false); // Consider if this should always be false here
+        getMessages();
+      }
+    } else if (value) { // This handles cases where recognition might not be active but text exists
+      setIsDefaultPage(false);
+      getMessages();
+    }
+  };
+
+  const handleDeleteChat = (uniqueTitle) => {
+    setCurrentTitle(uniqueTitle);
     setIsDeletePromptOpen(true);
-  };
-
-  const handleDeleteConfirm = () => {
-    const updatedChats = previousChats.filter(
-      (chat) => chat.title !== currentTitle
-    );
-    setPreviousChats(updatedChats);
-    setCurrentTitle("");
-    setIsDefaultPage(true);
-    setIsDeletePromptOpen(false);
   };
 
   const handleDeletePromptClose = () => {
     setIsDeletePromptOpen(false);
   };
 
+  const handleDeleteConfirm = () => {
+    setPreviousChats((prevChats) =>
+      prevChats.filter((chat) => chat.title !== currentTitle)
+    );
+    setIsDeletePromptOpen(false);
+    setIsDefaultPage(true);
+  };
+
   const handleAlertClose = () => {
     setIsAlertOpen(false);
   };
 
+  const handlekeyPress = (e) => {
+    if (e.key === "Enter" && e.shiftKey) {
+      e.preventDefault();
+      setValue((prevValue) => prevValue + "\n");
+    } else if (e.key === "Enter") {
+      setIsDefaultPage(false);
+      e.preventDefault();
+      getMessages();
+    }
+  };
+
   return (
     <div className={`app ${theme}`}>
-      <aside className={isActive ? "active" : ""}>
-        <div className="side-bar">
-          <button className="new-chat-button" onClick={createNewChat}>
-            + New Chat
-          </button>
-          <div className="history">
-            {uniqueTitles?.map((uniqueTitle, index) => (
-              <p key={index} onClick={() => handleClick(uniqueTitle)}>
-                {uniqueTitle}
-              </p>
-            ))}
-          </div>
-          <nav>
-            <p className="made-by">Made by Ankit</p>
-            <div className="circular-menu" onClick={toggleMenu}>
-              <div className="menu-button"></div>
-              <ul className="items-wrapper">
-                <li className="menu-item" onClick={handleRenameClick}>
-                  Rename Chat
-                </li>
-                <li className="menu-item" onClick={handleDeleteClick}>
-                  Delete Chat
-                </li>
-              </ul>
-            </div>
-            <div className="theme-switcher">
-              <button
-                className="theme-button"
-                onClick={() => setIsThemeMenuOpen(!isThemeMenuOpen)}
-              >
-                Theme
-              </button>
-              {isThemeMenuOpen && (
-                <div className="theme-options">
-                  <button onClick={() => handleThemeChange("default")}>
-                    Default
-                  </button>
-                  <button onClick={() => handleThemeChange("light")}>
-                    Light
-                  </button>
-                  <button onClick={() => handleThemeChange("dark")}>
-                    Dark
-                  </button>
-                  <button onClick={() => handleThemeChange("solarized")}>
-                    Solarized
-                  </button>
-                  <button onClick={() => handleThemeChange("nord")}>
-                    Nord
-                  </button>
-                  <button onClick={() => handleThemeChange("dracula")}>
-                    Dracula
-                  </button>
-                  <button onClick={() => handleThemeChange("gruvbox")}>
-                    Gruvbox
-                  </button>
-                  <button onClick={() => handleThemeChange("oceanic")}>
-                    Oceanic
-                  </button>
-                  <button onClick={() => handleThemeChange("purple")}>
-                    Purple
-                  </button>
-                  <button onClick={() => handleThemeChange("high-contrast")}>
-                    High Contrast
-                  </button>
-                  <button onClick={() => handleThemeChange("mono")}>
-                    Mono
-                  </button>
-                  <button onClick={() => handleThemeChange("warm")}>
-                    Warm
-                  </button>
-                  <button onClick={() => handleThemeChange("cold")}>
-                    Cold
-                  </button>
-                  <button onClick={() => handleThemeChange("forest")}>
-                    Forest
-                  </button>
-                  <button onClick={() => handleThemeChange("rose")}>
-                    Rose
-                  </button>
+      <section className="side-bar">
+        <button onClick={createNewChat}>+ New Conversation</button>
+        <ul className="history">
+          {uniqueTitles.map((uniqueTitle, index) => (
+            <li key={index} onClick={() => handleClick(uniqueTitle)}>
+              <div className="chat-title-container">
+                <button
+                  className="rename"
+                  onClick={() => handleRename(uniqueTitle)}
+                >
+                  <img className="renameimg" alt="rename button" />
+                </button>
+                <span>{uniqueTitle}</span>
+                <button
+                  className="delete"
+                  onClick={() => handleDeleteChat(uniqueTitle)}
+                >
+                  <img className="deleteimg" alt="delete button" />
+                </button>
+              </div>
+            </li>
+          ))}
+        </ul>
+        <div
+          id="circularMenu"
+          className={`circular-menu ${isActive ? "active" : ""}`}
+        >
+          <a className="floating-btn" onClick={toggleMenu}>
+            <i className="fa fa-plus"></i>
+          </a>
+
+          <menu className="items-wrapper">
+            <a
+              className={`dark menu-item fa fa-linkedin ${
+                theme === "dark" ? "active" : ""
+              }`}
+              onClick={() => handleThemeChange("dark")}
+            ></a>
+            <a
+              className={`light menu-item fa fa-linkedin ${
+                theme === "light" ? "active" : ""
+              }`}
+              onClick={() => handleThemeChange("light")}
+            ></a>
+            <a
+              className={`blue menu-item fa fa-linkedin ${
+                theme === "blue" ? "active" : ""
+              }`}
+              onClick={() => handleThemeChange("blue")}
+            ></a>
+            <a
+              className={`default menu-item fa fa-linkedin ${
+                theme === "default" ? "active" : ""
+              }`}
+              onClick={() => handleThemeChange("default")}
+            ></a>
+          </menu>
+        </div>
+      </section>
+
+      <section
+        className={`main ${isPromptOpen || isDeletePromptOpen ? "blur" : ""}`}
+      >
+        <h1 className="title">NutriBot</h1>
+        {isDefaultPage ? (
+          <DefaultPage />
+        ) : (
+          <ul className="feed">
+            {currentChat.map((chatMessage, index) => (
+              <li key={index}>
+                <div className="message-container">
+                  {chatMessage && (
+                    <div className="role-container">
+                      <p className="role">{chatMessage.role}</p>
+                      {chatMessage.role === "assistant" &&
+                        chatMessage.content && ( // Check for chatMessage.content directly
+                          <button
+                            className="speak-button"
+                            onClick={() => {
+                              if (chatMessage.isSpeaking) {
+                                stopSpeaking();
+                              } else {
+                                const content = chatMessage.content; // <--- Changed this line
+                                speak(content);
+                              }
+                            }}
+                          >
+                            {chatMessage.isSpeaking ? (
+                              <img className="speak" alt="Stop" />
+                            ) : (
+                              <img className="speak" alt="Speak" />
+                            )}
+                          </button>
+                        )}
+                    </div>
+                  )}
+                  {chatMessage && chatMessage.image ? (
+                    <img
+                      className="generated-image"
+                      src={chatMessage.image}
+                      alt="Generated"
+                    />
+                  ) : (
+                    chatMessage &&
+                    chatMessage.content && ( // Check for chatMessage.content directly
+                      <pre>
+                        <span>
+                          {chatMessage.content} {/* <--- Changed this line */}
+                        </span>
+                      </pre>
+                    )
+                  )}
                 </div>
+              </li>
+            ))}
+            <div ref={chatFeedRef} />
+            {/* Empty div for scrolling */}
+          </ul>
+        )}
+        <div className="bottom-section">
+          <div className={"input-container"}>
+            <textarea
+              id="input"
+              value={value}
+              onChange={(e) => setValue(e.target.value)}
+              onKeyPress={handlekeyPress}
+              placeholder="Type your message..."
+              disabled={isLoading}
+            />
+            {isListening ? (
+              <button className="voice_lisenting" onClick={stopListening}>
+                <img className="listen" alt="Listen" />
+              </button>
+            ) : (
+              <button className="voice_lisenting" onClick={startListening}>
+                <img className="mic" alt="Microphone" />
+              </button>
+            )}
+
+            <div
+              id="submit"
+              className={isLoading ? "loading" : ""}
+              onClick={getMessages}
+            >
+              {isLoading ? (
+                <>
+                  <span className="dot"></span>
+                  <span className="dot"></span>
+                  <span className="dot"></span>
+                </>
+              ) : (
+                <span>&#10146;</span>
               )}
             </div>
-          </nav>
-        </div>
-      </aside>
-      <main>
-        {isDefaultPage && <DefaultPage />}
-        {!isDefaultPage && (
-          <div className="chat-feed" ref={chatFeedRef}>
-            <ul className="feed">
-              {currentChat.map((chatMessage, index) => (
-                <li key={index}>
-                  <div className="message-container">
-                    {chatMessage && (
-                      <div className="role-container">
-                        <p className="role">{chatMessage.role}</p>
-                        {/* You can re-add speech synthesis button here if needed */}
-                      </div>
-                    )}
-                    {chatMessage && chatMessage.image ? (
-                      <img
-                        className="generated-image"
-                        src={chatMessage.image}
-                        alt="Generated"
-                      />
-                    ) : (
-                      chatMessage &&
-                      chatMessage.content && (
-                        // Render content, checking for markdown tables
-                        <>
-                          {chatMessage.content.split('\n\n').map((block, blockIndex) => {
-                              // If block contains potential table markers, try rendering as table
-                              if (block.includes('|') && block.includes('---')) {
-                                  return <MarkdownTableRenderer key={blockIndex} markdown={block} />;
-                              } else {
-                                  // Otherwise, render as regular preformatted text
-                                  return <pre key={blockIndex}><span>{block}</span></pre>;
-                              }
-                          })}
-                        </>
-                      )
-                    )}
-                  </div>
-                </li>
-              ))}
-              <div ref={chatFeedRef} /> {/* Scroll to bottom ref */}
-            </ul>
           </div>
-        )}
-        <div className="input-container">
-          <input
-            value={value}
-            onChange={(e) => setValue(e.target.value)}
-            onKeyPress={handleKeyPress}
-            disabled={isLoading}
-            placeholder={isLoading ? "Generating..." : "Type your message here..."}
-          />
-          <div id="submit-button" onClick={getMessages}>
-            ➢
-          </div>
-        </div>
-      </main>
 
-      {/* Nutrition Plan Input Modal */}
-      <Modal
-        isOpen={isNutritionModalOpen}
-        onRequestClose={handleCloseNutritionModal}
-        className="custom-modal"
-        overlayClassName="custom-modal-overlay"
-      >
-        <h2>Personalized Plan Details</h2>
-        <div>
-          <label>Height (cm):</label>
-          <input
-            type="number"
-            value={nutritionHeight}
-            onChange={(e) => setNutritionHeight(e.target.value)}
-            placeholder="e.g., 175"
-          />
+          <p className={"info"}>Made by Jawaad, Maaz, Mateen</p>
         </div>
-        <div>
-          <label>Weight (kg):</label>
-          <input
-            type="number"
-            value={nutritionWeight}
-            onChange={(e) => setNutritionWeight(e.target.value)}
-            placeholder="e.g., 70"
-          />
-        </div>
-        <div>
-          <label>Specific Goals/Instructions:</label>
-          <textarea
-            value={nutritionInstructions}
-            onChange={(e) => setNutritionInstructions(e.target.value)}
-            placeholder="e.g., I want to gain muscle, no dairy, prefer vegetarian meals."
-            rows="4"
-          />
-        </div>
-        <div className="modal-buttons">
-          <button onClick={handleSubmitNutrition} disabled={isLoading}>Generate Plan</button>
-          <button onClick={handleCloseNutritionModal}>Cancel</button>
-        </div>
-      </Modal>
+      </section>
 
-      {/* Existing Modals for rename, delete, alert */}
       <Modal
         isOpen={isPromptOpen}
         onRequestClose={handlePromptClose}
@@ -541,9 +507,9 @@ function App() {
           type="text"
           value={modalValue}
           onChange={(e) => setModalValue(e.target.value)}
-          onKeyPress={handleKeyPress} // Consider if this should trigger renaming on Enter
+          onKeyPress={handleKeyPress}
         />
-        <div className="modal-buttons">
+        <div>
           <button onClick={handlePromptSubmit}>Rename</button>
           <button onClick={handlePromptClose}>Cancel</button>
         </div>
@@ -556,7 +522,7 @@ function App() {
       >
         <h2>Are you sure?</h2>
         <p className="delete-prompt">Do you want to delete this chat?</p>
-        <div className="modal-buttons">
+        <div>
           <button onClick={handleDeleteConfirm}>Yes</button>
           <button onClick={handleDeletePromptClose}>No</button>
         </div>
@@ -569,7 +535,10 @@ function App() {
       >
         <div className="alert">
           <h2>Alert</h2>
-          <p>{modalValue}</p> {/* Use modalValue for alert message */}
+          <p>
+            The chat name is too big. Please try a shorter one.The limit is upto
+            16 characters.
+          </p>
           <button onClick={handleAlertClose}>OK</button>
         </div>
       </Modal>
